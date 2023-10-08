@@ -6,10 +6,14 @@
 char*
 fmtname(char *path)
 {
+  /*这里用static静态数组是因为能够成功返回一个有效的字符串，因为若直接声明一个非静态的局部数组，
+  那么在fmtname()返回值以后，非静态的局部数组在栈区的生命周期结束，会被直接清空，而static数组存在于内存空间的data.段，
+  能够一直驻留在内存中，不受影响，因此能够成功返回。*/
   static char buf[DIRSIZ+1];
   char *p;
 
   // Find first character after last slash.
+  //获取最后一个斜杠后面的内容
   for(p=path+strlen(path); p >= path && *p != '/'; p--)
     ;
   p++;
@@ -17,7 +21,10 @@ fmtname(char *path)
   // Return blank-padded name.
   if(strlen(p) >= DIRSIZ)
     return p;
+
+  //将p指针，也就是斜杠后面的字符拷贝到buf中
   memmove(buf, p, strlen(p));
+  //将buf的前DIRSIZ-strlen(p)设置为' ' 
   memset(buf+strlen(p), ' ', DIRSIZ-strlen(p));
   return buf;
 }
@@ -54,6 +61,7 @@ ls(char *path)
     strcpy(buf, path);
     p = buf+strlen(buf);
     *p++ = '/';
+    //while里面的if(de.inum==0)代表了此文件夹无文件，所以直接continue，（continue操作后进行下一次read ）
     while(read(fd, &de, sizeof(de)) == sizeof(de)){
       if(de.inum == 0)
         continue;
