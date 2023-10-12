@@ -103,4 +103,5 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  int tracemask;               // the sys calls this proc is tracing  << 添加一个PCB要保存的信息，用一个mask来识别当前的system number
 };

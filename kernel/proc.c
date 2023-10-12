@@ -73,6 +73,24 @@ myproc(void) {
   return p;
 }
 
+//获取进程数目
+uint64
+proc_size(void)
+{
+  struct proc *p;
+  uint64 count = 0;
+  for(p = proc; p < &proc[NPROC]; p++) {
+    // 此处不一定需要加锁, 因为该函数是只读不写
+    // 但proc.c里其他类似的遍历时都加了锁, 那我们也加上
+    acquire(&p->lock);
+    if(p->state != UNUSED) {
+      count += 1;
+    }
+    release(&p->lock);
+  }
+  return count;
+}
+
 int
 allocpid() {
   int pid;
@@ -260,9 +278,9 @@ fork(void)
 {
   int i, pid;
   struct proc *np;
-  struct proc *p = myproc();
+  struct proc *p = myproc();   //创建一个proc结构体用于存放父进程的进程信息。myproc函数获取进程信息的方式是先获取cpu，再获取当前cpu上的进程信息
 
-  // Allocate process.
+  // Allocate process.为子进程分配空间，从进程控制块数组中寻找一个空闲的进程控制块。allocproc函数如果分配失败会返回0
   if((np = allocproc()) == 0){
     return -1;
   }
@@ -280,16 +298,18 @@ fork(void)
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
 
-  // Cause fork to return 0 in the child.
+  // Cause fork to return 0 in the child.a0寄存器用来存放系统调用的返回值。
   np->trapframe->a0 = 0;
 
-  // increment reference counts on open file descriptors.
+  // increment reference counts on open file descriptors.继承文件描述符表
   for(i = 0; i < NOFILE; i++)
     if(p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
 
   safestrcpy(np->name, p->name, sizeof(p->name));
+
+  np->tracemask=p->tracemask;  //子进程复制父进程的tracemask
 
   pid = np->pid;
 

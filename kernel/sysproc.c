@@ -6,7 +6,7 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
-
+#include"sysinfo.h"
 uint64
 sys_exit(void)
 {
@@ -94,4 +94,33 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+uint64
+sys_trace(void)
+{
+  int mask;
+  if(argint(0,&mask)<0)     //判断参数是否获取成功，argint函数的作用是从a0寄存中取出存放的系统调用数字放到mask中；
+  {
+    return -1;
+  }
+  myproc()->tracemask=mask; //将获取到的系统调用数字放到PCB中，便于后面打印相关信息。
+  return 0;
+}
+
+uint64
+sys_sysinfo(void)
+{
+  struct sysinfo info;
+  uint64 addr;
+  // 获取用户态传入的sysinfo结构体
+  if (argaddr(0, &addr) < 0) 
+    return -1;
+  struct proc* p = myproc();
+  info.freemem = free_mem();
+  info.nproc = proc_size();
+  // 将内核态中的info复制到用户态
+  if (copyout(p->pagetable, addr, (char*)&info, sizeof(info)) < 0)
+    return -1;
+  return 0;
 }
