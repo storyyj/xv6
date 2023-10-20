@@ -120,6 +120,25 @@ found:
     release(&p->lock);
     return 0;
   }
+  //使得进程分配时进程自身的内核表就已经包含原内核页表的映射
+  p->kernelpt = kvminitForUkp();
+  //若为0，则说明分配内存失败
+    if(p->kernelpt == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+
+  //把在procinit函数中已经分配好的物理页地址建立一个mapping放到ukp中
+  uint64 va = KSTACK((int) (p-proc)); 
+  //由kvmpa函数计算出va所对应的物理页地址pa
+  uint64 pa=kvmpa(va);
+  memset((void*)pa,0,PGSIZE);
+  //在新创建的进程内核页表ukp中建立进程内核栈的映射
+  kvmmapForUkp(va,pa,PGSIZE,PTE_R|PTE_W,p->kernelpt);
+  p->kstack=va;
+
+
 
   // Set up new context to start executing at forkret,
   // which returns to user space.
@@ -150,6 +169,34 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  if(p->kernelpt)
+  {
+    freeUkp(p->kernelpt,1);
+  }
+  p->kernelpt = 0;
+}
+
+void
+freeUkp(pagetable_t ukp,int level)
+{
+  if(level==3)
+  {
+    return;
+  }
+  for(int i=0;i<512;i++)
+  {
+    pte_t pte=ukp[i];
+    if(pte|PTE_V)
+    {
+      ukp[i]=0;
+      if((pte&(PTE_R|PTE_W|PTE_X))==0){
+      // this PTE points to a lower-level page table.
+        uint64 child = PTE2PA(pte);
+        freeUkp((pagetable_t)child,level+1);
+        }
+    }
+  }
+kfree((void *)ukp);
 }
 
 // Create a user page table for a given process,
@@ -220,6 +267,7 @@ userinit(void)
   // and data into it.
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
+  u2kPageCopy(p->pagetable,p->kernelpt,0,p->sz);
 
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
@@ -246,9 +294,19 @@ growproc(int n)
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
+    //增量同步[oldsize,newsize]
+    if(u2kPageCopy(p->pagetable,p->kernelpt,p->sz,sz)!=0){
+      return -1;
+    }
   } else if(n < 0){
     sz = uvmdealloc(p->pagetable, sz, sz + n);
+    if(sz!=p->sz)
+    {
+      //缩量同步[newsize,npages]
+      uvmunmap(p->kernelpt,PGROUNDUP(sz),((PGROUNDUP(p->sz)-PGROUNDUP(sz))/PGSIZE),0);
+    }
   }
+  
   p->sz = sz;
   return 0;
 }
@@ -274,6 +332,13 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
+
+  if(u2kPageCopy(np->pagetable,np->kernelpt,0,p->sz)!=0){
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
+
 
   np->parent = p;
 
@@ -473,11 +538,18 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+        //当前进程放到cpu运行时要切换为进程的内核页表，即把进程内核页表放到SATP寄存器中
+        w_satp(MAKE_SATP(p->kernelpt));
+        sfence_vma();
+        //这里将当前cpu寄存器值保存，将p的上下文加载到该cpu寄存器中
+        //提前将进程的内核页表写入satp寄存器，返回内核时就会使用该进程的内核页表
         swtch(&c->context, &p->context);
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
+        //切换回全局内核页表
+        kvminithart();
 
         found = 1;
       }
@@ -486,6 +558,8 @@ scheduler(void)
 #if !defined (LAB_FS)
     if(found == 0) {
       intr_on();
+      //若没有可运行的进程，则将内核自身的页表写入SATP寄存器中并刷新TLB
+      kvminithart();
       asm volatile("wfi");
     }
 #else
